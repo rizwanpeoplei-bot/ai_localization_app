@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Local AI video localization proof of concept" />
+    <title>AI Localization Studio</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Dubbing v2 proof of concept</p>
+          <h1>Localize a video.<br /><span>Keep its character.</span></h1>
+          <p class="lede">Submit an MP4, a direct public MP4 link, or a YouTube video, choose a language, and apply finishing touches in one local workflow.</p>
+        </div>
+        <div class="status-pill"><span></span> Local processing UI</div>
+      </header>
+
+      <section class="workspace">
+        <form id="localization-form" class="panel form-panel">
+          <div class="section-heading">
+            <span>01</span>
+            <div><h2>Source video</h2><p>Choose one input method.</p></div>
+          </div>
+
+          <div class="segmented" role="group" aria-label="Video input type">
+            <button type="button" class="segment active" data-mode="url">Video link</button>
+            <button type="button" class="segment" data-mode="upload">Upload MP4</button>
+          </div>
+          <div id="url-input" class="field">
+            <label for="videoUrl">Video URL</label>
+            <input id="videoUrl" name="videoUrl" type="url" placeholder="https://www.youtube.com/shorts/... or https://cdn.example.com/video.mp4" autocomplete="off" />
+            <small>YouTube videos/Shorts and direct public MP4 downloads are supported. Other webpage/player links and private networks are blocked.</small>
+          </div>
+          <div id="upload-input" class="field hidden">
+            <label for="video">MP4 file</label>
+            <input id="video" name="video" type="file" accept="video/mp4,.mp4" />
+            <small>H.264/AAC MP4, maximum 1080p.</small>
+          </div>
+          <label id="source-rights-row" class="check-row">
+            <input name="confirmSourceRights" type="checkbox" />
+            <span><strong>I own or have permission to process this video.</strong><small>Required for YouTube imports.</small></span>
+          </label>
+
+          <div class="section-heading spaced">
+            <span>02</span>
+            <div><h2>Translation</h2><p>Source and target must differ.</p></div>
+          </div>
+          <div class="field-grid two">
+            <div class="field">
+              <label for="sourceLanguage">Source language</label>
+              <select id="sourceLanguage" name="sourceLanguage">
+                <option value="en">English</option>
+                <option value="ur">Urdu</option>
+                <option value="hi">Hindi</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="targetLanguage">Target language</label>
+              <select id="targetLanguage" name="targetLanguage">
+                <option value="ur">Urdu</option>
+                <option value="hi">Hindi</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+          </div>
+          <label class="check-row">
+            <input name="preserveVoice" type="checkbox" checked />
+            <span><strong>Preserve speaker characteristics</strong><small>Dubbing v2 applies supported speaker preservation.</small></span>
+          </label>
+
+          <div class="section-heading spaced">
+            <span>03</span>
+            <div><h2>Finishing</h2><p>Applied with FFmpeg after dubbing.</p></div>
+          </div>
+          <div class="field-grid two">
+            <div class="field">
+              <label for="subtitleMode">Subtitles</label>
+              <select id="subtitleMode" name="subtitleMode">
+                <option value="burned">Generate and burn into video</option>
+                <option value="file">Generate SRT only</option>
+                <option value="none">No subtitle delivery</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="logo">Logo / watermark</label>
+              <input id="logo" name="logo" type="file" accept="image/png,image/jpeg,image/webp" />
+            </div>
+            <div class="field">
+              <label for="logoPosition">Logo position</label>
+              <select id="logoPosition" name="logoPosition">
+                <option value="bottom-right">Bottom right</option>
+                <option value="bottom-left">Bottom left</option>
+                <option value="top-right">Top right</option>
+                <option value="top-left">Top left</option>
+              </select>
+            </div>
+            <div class="field range-field">
+              <label for="logoSizePercent">Logo size <output id="logo-size-value">15%</output></label>
+              <input id="logoSizePercent" name="logoSizePercent" type="range" min="5" max="30" value="15" />
+            </div>
+            <div class="field range-field">
+              <label for="brightness">Brightness <output id="brightness-value">0</output></label>
+              <input id="brightness" name="brightness" type="range" min="-50" max="50" value="0" />
+            </div>
+            <div class="field range-field">
+              <label for="volumePercent">Output volume <output id="volume-value">100%</output></label>
+              <input id="volumePercent" name="volumePercent" type="range" min="0" max="200" value="100" />
+            </div>
+          </div>
+
+          <div class="provider-box">
+            <div class="field">
+              <label for="provider">Provider</label>
+              <select id="provider" name="provider">
+                <option value="mock">Mock — free workflow test</option>
+                <option value="elevenlabs">ElevenLabs — live and billable</option>
+              </select>
+            </div>
+            <label id="billable-row" class="check-row compact hidden">
+              <input name="confirmBillable" type="checkbox" />
+              <span><strong>I confirm this live request may incur charges.</strong></span>
+            </label>
+          </div>
+          <p id="provider-notice" class="provider-notice" role="status">
+            Mock mode does not translate the voice. It reuses the original audio and creates one sample subtitle to test the workflow.
+          </p>
+
+          <button id="submit-button" class="primary" type="submit"><span>Test workflow — no translation</span><b>→</b></button>
+          <p id="form-error" class="error-message" role="alert"></p>
+        </form>
+
+        <aside class="panel result-panel">
+          <div id="empty-state" class="empty-state">
+            <div class="orb"><i></i></div>
+            <h2>Your result appears here</h2>
+            <p>Start with the mock provider to verify input, subtitles, branding, brightness, volume, and final rendering without provider charges.</p>
+          </div>
+
+          <div id="progress-state" class="hidden progress-state">
+            <p class="eyebrow">Processing</p>
+            <h2 id="job-stage">Queued</h2>
+            <div class="progress-track"><span></span></div>
+            <p>Keep this page open. Provider work is processed one job at a time.</p>
+          </div>
+
+          <div id="result-state" class="hidden result-state">
+            <p class="eyebrow success">Complete</p>
+            <h2 id="result-title">Localized video ready</h2>
+            <p id="result-provider-notice" class="result-provider-notice hidden"></p>
+            <video id="result-video" controls preload="metadata"></video>
+            <div id="result-meta" class="result-meta"></div>
+            <div id="download-links" class="download-grid"></div>
+          </div>
+
+          <div id="failed-state" class="hidden failed-state">
+            <p class="eyebrow danger">Generation failed</p>
+            <h2 id="failure-code">Something went wrong</h2>
+            <p id="failure-message"></p>
+            <button id="try-again" type="button" class="secondary">Return to form</button>
+          </div>
+        </aside>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

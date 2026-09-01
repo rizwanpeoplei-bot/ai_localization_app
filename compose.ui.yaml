@@ -1,0 +1,21 @@
+services:
+  localization-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.poc
+    image: ai-localization-poc
+    entrypoint:
+      - node
+      - --enable-source-maps
+      - apps/poc-elevenlabs/dist/web-server.js
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    environment:
+      UI_HOST: 0.0.0.0
+      UI_PORT: 3000
+      UI_ARTIFACT_ROOT: /workspace/artifacts
+      YTDLP_PATH: /usr/local/bin/yt-dlp
+      ELEVENLABS_API_KEY: "${ELEVENLABS_API_KEY:-}"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./artifacts:/workspace/artifacts

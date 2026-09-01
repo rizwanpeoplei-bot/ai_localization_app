@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "english-source",
+      "input": "input/en.mp4",
+      "sourceLanguage": "en",
+      "targets": ["ur", "hi"]
+    },
+    {
+      "id": "urdu-source",
+      "input": "input/ur.mp4",
+      "sourceLanguage": "ur",
+      "targets": ["en", "hi"]
+    },
+    {
+      "id": "hindi-source",
+      "input": "input/hi.mp4",
+      "sourceLanguage": "hi",
+      "targets": ["en", "ur"]
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      ffmpeg \
+      fontconfig \
+      fonts-noto-core \
+      fonts-noto-extra \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG YTDLP_VERSION=2026.08.19
+ARG YTDLP_SHA256=58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a
+
+RUN curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp_linux" -o /usr/local/bin/yt-dlp \
+    && echo "${YTDLP_SHA256}  /usr/local/bin/yt-dlp" | sha256sum -c - \
+    && chmod 0755 /usr/local/bin/yt-dlp \
+    && yt-dlp --version
+
+ARG POC_NPM_VERSION=11.6.2
+
+RUN npm install --global "npm@${POC_NPM_VERSION}" \
+    && npm --version
+
+WORKDIR /workspace
+
+COPY package.json package-lock.json tsconfig.base.json eslint.config.js ./
+COPY apps/poc-elevenlabs/package.json apps/poc-elevenlabs/package.json
+RUN npm ci
+
+COPY apps/poc-elevenlabs apps/poc-elevenlabs
+RUN npm run typecheck && npm run lint && npm test && npm run build
+
+RUN groupadd --gid 10001 poc \
+    && useradd --uid 10001 --gid 10001 --create-home poc
+
+USER poc
+
+EXPOSE 3000
+
+ENTRYPOINT ["node", "--enable-source-maps", "apps/poc-elevenlabs/dist/cli.js"]
