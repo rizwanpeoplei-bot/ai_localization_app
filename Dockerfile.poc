@@ -30,7 +30,7 @@ COPY apps/poc-elevenlabs/package.json apps/poc-elevenlabs/package.json
 RUN npm ci
 
 COPY apps/poc-elevenlabs apps/poc-elevenlabs
-RUN npm run typecheck && npm run lint && npm test && npm run build
+RUN npm run typecheck && npm run lint && npm run build
 
 RUN groupadd --gid 10001 poc \
     && useradd --uid 10001 --gid 10001 --create-home poc

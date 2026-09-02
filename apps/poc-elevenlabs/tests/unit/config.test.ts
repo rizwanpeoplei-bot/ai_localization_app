@@ -25,6 +25,19 @@ describe("output path validation", () => {
     }
   });
 
+  it("requires the API key from the environment for live execution", () => {
+    const previous = process.env.ELEVENLABS_API_KEY;
+    delete process.env.ELEVENLABS_API_KEY;
+    try {
+      expect(() => loadConfig("elevenlabs")).toThrow(/ELEVENLABS_API_KEY/u);
+      process.env.ELEVENLABS_API_KEY = "env-key";
+      expect(loadConfig("elevenlabs").elevenLabsApiKey).toBe("env-key");
+    } finally {
+      if (previous === undefined) delete process.env.ELEVENLABS_API_KEY;
+      else process.env.ELEVENLABS_API_KEY = previous;
+    }
+  });
+
   it("rejects HTML or arbitrary content renamed to MP4", async () => {
     const directory = await mkdtemp(join(tmpdir(), "ailocalization-input-"));
     const input = join(directory, "source.mp4");

@@ -1,6 +1,7 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import process from "node:process";
+import { parseEnv } from "node:util";
 import type { ProviderKind } from "./domain.js";
 import { PocError } from "./errors.js";
 import { loadConfig } from "./config.js";
@@ -12,8 +13,15 @@ import { MockDubbingProvider } from "./providers/mock-provider.js";
 import type { DubbingProvider } from "./providers/provider.js";
 
 export function loadLocalEnvironment(): void {
-  const localEnvironment = resolve(".env.local");
-  if (existsSync(localEnvironment)) process.loadEnvFile(localEnvironment);
+  const protectedKeys = new Set(Object.keys(process.env));
+  for (const file of [".env", ".env.local"]) {
+    const environmentPath = resolve(file);
+    if (!existsSync(environmentPath)) continue;
+    const parsed = parseEnv(readFileSync(environmentPath, "utf8"));
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!protectedKeys.has(key)) process.env[key] = value;
+    }
+  }
 }
 
 export function requireLiveConfirmation(provider: ProviderKind, confirmed: boolean | undefined): void {
