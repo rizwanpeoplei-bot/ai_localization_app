@@ -1,9 +1,7 @@
-import { createReadStream } from "node:fs";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, openAsBlob } from "node:fs";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
-import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import type {
   Language,
   ProviderProject,
@@ -37,25 +35,28 @@ function warningLabels(warnings: unknown[] | undefined): string[] {
 }
 
 function errorLabel(error: unknown): string | undefined {
+  if (typeof error === "string") return sanitizeMessage(error);
   if (typeof error !== "object" || error === null) return undefined;
-  const code = (error as Record<string, unknown>).code;
-  return typeof code === "string" ? sanitizeMessage(code) : "provider-reported-failure";
+  const fields = error as Record<string, unknown>;
+  for (const key of ["error", "message", "code", "detail"]) {
+    const value = fields[key];
+    if (typeof value === "string" && value.trim()) return sanitizeMessage(value);
+  }
+  return Object.keys(fields).length > 0 ? "provider-reported-failure" : undefined;
 }
 
 export class ElevenLabsDubbingProvider implements DubbingProvider {
   public readonly kind = "elevenlabs" as const;
-  private readonly client: ElevenLabsClient;
+  private readonly apiKey: string;
+  private readonly baseUrl: string;
+  private readonly fetchImplementation: typeof fetch;
   private readonly timeoutMs: number;
 
   public constructor(options: ElevenLabsProviderOptions) {
+    this.apiKey = options.apiKey;
+    this.baseUrl = options.baseUrl.replace(/\/+$/u, "");
+    this.fetchImplementation = options.fetchImplementation ?? fetch;
     this.timeoutMs = options.timeoutMs;
-    this.client = new ElevenLabsClient({
-      apiKey: options.apiKey,
-      baseUrl: options.baseUrl,
-      timeoutInSeconds: Math.ceil(options.timeoutMs / 1_000),
-      maxRetries: 2,
-      ...(options.fetchImplementation ? { fetch: options.fetchImplementation } : {}),
-    });
   }
 
   public async createProject(
@@ -64,17 +65,17 @@ export class ElevenLabsDubbingProvider implements DubbingProvider {
     reference: string,
   ): Promise<ProviderProject> {
     try {
-      const project = await this.client.dubbing.project.create({
-        file: createReadStream(inputPath),
-        sourceLanguage,
-        modelId: "dubbing_v2",
-        reference: reference.slice(0, 500),
-      }, { maxRetries: 0 });
-      const providerError = errorLabel(project.error);
+      const body = new FormData();
+      body.append("file", await openAsBlob(inputPath), "source.mp4");
+      body.append("source_language", sourceLanguage);
+      body.append("model_id", "dubbing_v2");
+      body.append("reference", reference.slice(0, 500));
+      const project = await this.requestJson("v1/dubbing/project", { method: "POST", body });
+      const providerError = errorLabel(this.optionalValue(project, "error"));
       return {
-        id: project.projectId,
-        status: ProjectStatusSchema.parse(project.status),
-        warnings: warningLabels(project.warnings),
+        id: this.requireString(project, "project_id"),
+        status: ProjectStatusSchema.parse(this.requireString(project, "status")),
+        warnings: warningLabels(this.optionalArray(project, "warnings")),
         ...(providerError ? { error: providerError } : {}),
       };
     } catch (error) {
@@ -84,12 +85,12 @@ export class ElevenLabsDubbingProvider implements DubbingProvider {
 
   public async getProject(projectId: string): Promise<ProviderProject> {
     try {
-      const project = await this.client.dubbing.project.get(projectId);
-      const providerError = errorLabel(project.error);
+      const project = await this.requestJson(`v1/dubbing/project/${encodeURIComponent(projectId)}`);
+      const providerError = errorLabel(this.optionalValue(project, "error"));
       return {
-        id: project.projectId,
-        status: ProjectStatusSchema.parse(project.status),
-        warnings: warningLabels(project.warnings),
+        id: this.requireString(project, "project_id"),
+        status: ProjectStatusSchema.parse(this.requireString(project, "status")),
+        warnings: warningLabels(this.optionalArray(project, "warnings")),
         ...(providerError ? { error: providerError } : {}),
       };
     } catch (error) {
@@ -102,9 +103,11 @@ export class ElevenLabsDubbingProvider implements DubbingProvider {
     targetLanguage: Language,
   ): Promise<ProviderTarget> {
     try {
-      const target = await this.client.dubbing.project.language.create(projectId, {
-        targetLanguage,
-      }, { maxRetries: 0 });
+      const target = await this.requestJson(`v1/dubbing/project/${encodeURIComponent(projectId)}/language`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ target_language: targetLanguage }),
+      });
       return this.mapTarget(target);
     } catch (error) {
       throw classifyProviderError(error);
@@ -113,7 +116,11 @@ export class ElevenLabsDubbingProvider implements DubbingProvider {
 
   public async getLanguageTarget(projectId: string, languageId: string): Promise<ProviderTarget> {
     try {
-      return this.mapTarget(await this.client.dubbing.project.language.get(projectId, languageId));
+      return this.mapTarget(
+        await this.requestJson(
+          `v1/dubbing/project/${encodeURIComponent(projectId)}/language/${encodeURIComponent(languageId)}`,
+        ),
+      );
     } catch (error) {
       throw classifyProviderError(error);
     }
@@ -121,25 +128,32 @@ export class ElevenLabsDubbingProvider implements DubbingProvider {
 
   public async getTargetTranscript(projectId: string, languageId: string): Promise<TargetTranscript> {
     try {
-      const transcript = await this.client.dubbing.project.language.transcript.get(projectId, languageId);
+      const transcript = await this.requestJson(
+        `v1/dubbing/project/${encodeURIComponent(projectId)}/language/${encodeURIComponent(languageId)}/transcript`,
+      );
+      const segments = this.optionalArray(transcript, "segments") ?? [];
       return TargetTranscriptSchema.parse({
-        sourceLanguage: LanguageSchema.parse(transcript.sourceLanguage),
-        targetLanguage: LanguageSchema.parse(transcript.targetLanguage),
-        revision: transcript.revision,
-        segments: transcript.segments.map((segment) => {
-          if (!segment.translation) {
+        sourceLanguage: LanguageSchema.parse(this.requireString(transcript, "source_language")),
+        targetLanguage: LanguageSchema.parse(this.requireString(transcript, "target_language")),
+        revision: this.requireNumber(transcript, "revision"),
+        segments: segments.map((segment) => {
+          if (typeof segment !== "object" || segment === null) {
+            throw new PocError("TRANSCRIPT_SEGMENT_INVALID", "Provider transcript segment is invalid");
+          }
+          const translation = this.optionalValue(segment, "translation");
+          if (typeof translation !== "string" || !translation) {
             throw new PocError(
               "TRANSCRIPT_TRANSLATION_MISSING",
-              `Provider transcript segment ${segment.id} has no translation`,
+              `Provider transcript segment ${this.requireString(segment, "id")} has no translation`,
             );
           }
           return {
-            id: segment.id,
-            speakerId: segment.speakerId,
-            startSeconds: segment.startS,
-            endSeconds: segment.endS,
-            sourceText: segment.sourceText,
-            translation: segment.translation,
+            id: this.requireString(segment, "id"),
+            speakerId: this.requireString(segment, "speaker_id"),
+            startSeconds: this.requireNumber(segment, "start_s"),
+            endSeconds: this.requireNumber(segment, "end_s"),
+            sourceText: this.requireString(segment, "source_text"),
+            translation,
           };
         }),
       });
@@ -154,12 +168,18 @@ export class ElevenLabsDubbingProvider implements DubbingProvider {
     outputPath: string,
   ): Promise<void> {
     try {
-      const refreshed = await this.client.dubbing.project.language.get(projectId, languageId);
-      const signedUrl = refreshed.outputs?.losslessAudio;
-      if (refreshed.status !== "completed" || !signedUrl) {
+      const refreshed = await this.requestJson(
+        `v1/dubbing/project/${encodeURIComponent(projectId)}/language/${encodeURIComponent(languageId)}`,
+      );
+      const outputs = this.optionalValue(refreshed, "outputs");
+      const signedUrl =
+        typeof outputs === "object" && outputs !== null
+          ? this.optionalValue(outputs, "lossless_audio")
+          : undefined;
+      if (this.requireString(refreshed, "status") !== "completed" || typeof signedUrl !== "string" || !signedUrl) {
         throw new PocError("PROVIDER_OUTPUT_MISSING", "Completed target has no lossless audio output");
       }
-      const response = await fetch(signedUrl, { signal: AbortSignal.timeout(this.timeoutMs) });
+      const response = await this.fetchImplementation(signedUrl, { signal: AbortSignal.timeout(this.timeoutMs) });
       if (!response.ok || !response.body) {
         throw new PocError(
           "PROVIDER_DOWNLOAD_FAILED",
@@ -178,30 +198,82 @@ export class ElevenLabsDubbingProvider implements DubbingProvider {
 
   public async deleteProject(projectId: string): Promise<void> {
     try {
-      await this.client.dubbing.project.delete(projectId);
+      await this.requestEmpty(`v1/dubbing/project/${encodeURIComponent(projectId)}`, { method: "DELETE" });
     } catch (error) {
       throw classifyProviderError(error);
     }
   }
 
-  private mapTarget(target: {
-    languageId: string;
-    projectId: string;
-    targetLanguage: string;
-    status: string;
-    warnings?: unknown[];
-    error?: unknown;
-    outputs?: { losslessAudio?: string };
-  }): ProviderTarget {
-    const providerError = errorLabel(target.error);
+  private mapTarget(target: unknown): ProviderTarget {
+    const outputs = this.optionalValue(target, "outputs");
+    const providerError = errorLabel(this.optionalValue(target, "error"));
     return {
-      id: target.languageId,
-      projectId: target.projectId,
-      targetLanguage: LanguageSchema.parse(target.targetLanguage),
-      status: TargetStatusSchema.parse(target.status),
-      warnings: warningLabels(target.warnings),
-      hasLosslessAudio: Boolean(target.outputs?.losslessAudio),
+      id: this.requireString(target, "language_id"),
+      projectId: this.requireString(target, "project_id"),
+      targetLanguage: LanguageSchema.parse(this.requireString(target, "target_language")),
+      status: TargetStatusSchema.parse(this.requireString(target, "status")),
+      warnings: warningLabels(this.optionalArray(target, "warnings")),
+      hasLosslessAudio: Boolean(
+        typeof outputs === "object" && outputs !== null && this.optionalValue(outputs, "lossless_audio"),
+      ),
       ...(providerError ? { error: providerError } : {}),
     };
+  }
+
+  private async requestJson(path: string, init: RequestInit = {}): Promise<unknown> {
+    const response = await this.request(path, init);
+    return response.json() as Promise<unknown>;
+  }
+
+  private async requestEmpty(path: string, init: RequestInit = {}): Promise<void> {
+    await this.request(path, init);
+  }
+
+  private async request(path: string, init: RequestInit): Promise<Response> {
+    const response = await this.fetchImplementation(`${this.baseUrl}/${path}`, {
+      ...init,
+      headers: {
+        "xi-api-key": this.apiKey,
+        ...init.headers,
+      },
+      signal: init.signal ?? AbortSignal.timeout(this.timeoutMs),
+    });
+    if (response.ok) return response;
+
+    throw new PocError(
+      response.status === 429 ? "PROVIDER_RATE_LIMIT" : response.status >= 500 ? "PROVIDER_TEMPORARY" : "PROVIDER_FAILED",
+      `Provider request failed with HTTP ${response.status}: ${await this.safeResponseText(response)}`,
+      response.status === 408 || response.status === 429 || response.status >= 500,
+    );
+  }
+
+  private async safeResponseText(response: Response): Promise<string> {
+    try {
+      return sanitizeMessage(await response.text());
+    } catch {
+      return "unreadable response";
+    }
+  }
+
+  private optionalValue(value: unknown, key: string): unknown {
+    if (typeof value !== "object" || value === null) return undefined;
+    return (value as Record<string, unknown>)[key];
+  }
+
+  private optionalArray(value: unknown, key: string): unknown[] | undefined {
+    const candidate = this.optionalValue(value, key);
+    return Array.isArray(candidate) ? candidate : undefined;
+  }
+
+  private requireString(value: unknown, key: string): string {
+    const candidate = this.optionalValue(value, key);
+    if (typeof candidate === "string") return candidate;
+    throw new PocError("PROVIDER_RESPONSE_INVALID", `Provider response missing string field: ${key}`);
+  }
+
+  private requireNumber(value: unknown, key: string): number {
+    const candidate = this.optionalValue(value, key);
+    if (typeof candidate === "number") return candidate;
+    throw new PocError("PROVIDER_RESPONSE_INVALID", `Provider response missing numeric field: ${key}`);
   }
 }
